@@ -9,16 +9,21 @@ import (
 )
 
 func main() {
-	mux:=http.NewServeMux()
-	backends := []*core.Backend{
-		core.NewBackend("https://localhost:9001") ,
-		core.NewBackend("https://localhost:9002"),
-		core.NewBackend("https://localhost:9002"),
-	}
 
-	lb := core.Initialize_LB(backends)
+	lb:=core.Initialize_LB()
 
-	mux.HandleFunc("/hmm",lb.ServeHTTP)
+
+
+	lb.AddRoute("/api/users", []string{
+		"http://www.google.com",
+		"http://www.facebook.com",
+	})
+	lb.AddRoute("/api/posts", []string{
+		"http://www.amazon.com",
+		"http://www.bing.com",
+	})
+
+	
 
 
 	fmt.Println("Load Balancer started at :8080")

@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http/httputil"
 	"net/url"
+	"sync/atomic"
 )
 
 type Backend struct {
@@ -11,6 +12,8 @@ type Backend struct {
 	Alive        bool
 	ReverseProxy *httputil.ReverseProxy
 }
+
+
 
 func NewBackend(rawURL string) *Backend {
 	parsedURL, err := url.Parse(rawURL)
@@ -23,3 +26,20 @@ func NewBackend(rawURL string) *Backend {
 		ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
 	}
 }
+
+
+
+type BackendPool struct {
+	Backends []*Backend
+	Current  int64
+}
+
+
+
+func (BP *BackendPool) GetNextBackend() *Backend {
+	next:=atomic.AddInt64(&BP.Current,1);
+	return BP.Backends[int(next)%len(BP.Backends)]
+}
+
+
+
