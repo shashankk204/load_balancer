@@ -62,3 +62,6 @@ coverage.html
 # Build directories
 build/
 dist/
+
+
+mock_servers/command.cmd

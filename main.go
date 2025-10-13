@@ -1,31 +1,54 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"time"
 
 	core "github.com/shashankk204/load_balancer/pkg"
 )
 
+type RouteConfig struct {
+	Prefix   string   `json:"prefix"`
+	Backends []string `json:"backends"`
+}
+
+type Config struct {
+	Routes []RouteConfig `json:"routes"`
+}
+
+func LoadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg Config
+	err = json.Unmarshal(data, &cfg)
+	return &cfg, err
+}
+
+
+
+
+
+
 func main() {
+	cfg, err := LoadConfig("routes.json")
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	lb:=core.Initialize_LB()
 
+	for _, r := range cfg.Routes {
+		lb.AddRoute(r.Prefix, r.Backends)
+	}
 
-
-	lb.AddRoute("/api/users", []string{
-		"http://www.google.com",
-		"http://www.facebook.com",
-	})
-	lb.AddRoute("/api/posts", []string{
-		"http://www.amazon.com",
-		"http://www.bing.com",
-	})
-
-	
-
-
+	lb.StartHealthChecks(5*time.Second, "/health")
+ 
 	fmt.Println("Load Balancer started at :8080")
 	if err := http.ListenAndServe(":8080", lb); err != nil {
 		log.Fatal(err)
