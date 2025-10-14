@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -175,4 +176,36 @@ func (lb *LoadBalancer) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 
 
+func (lb *LoadBalancer) GetRoutesInfo() []map[string]interface{} {
+	var result []map[string]interface{}
+	for prefix, pool := range lb.Routes {
+		var backends []string
+		for _, b := range pool.Backends {
+			backends = append(backends, b.URL.String())
+		}
+		result = append(result, map[string]interface{}{
+			"prefix":   prefix,
+			"strategy": pool.Strategy,
+			"backends": backends,
+		})
+	}
+	return result
+}
 
+func (lb *LoadBalancer) UpdateRoute(prefix string, backends []string, strategy string) error {
+	pool, ok := lb.Routes[prefix]
+	if !ok {
+		return fmt.Errorf("route not found: %s", prefix)
+	}
+
+	if len(backends) > 0 {
+		newPool := NewRoute(backends)
+		pool.Backends = newPool.Backends
+	}
+	
+	pool.Strategy = ParseStrategy(strategy)
+	
+
+	lb.Routes[prefix] = pool
+	return nil
+}

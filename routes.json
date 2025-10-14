@@ -5,15 +5,16 @@
       "backends": [
         "http://localhost:8081",
         "http://localhost:8083"
-      ],
-      "strategy": "least_active"
+      ]
     },
     {
       "prefix": "/posts",
       "backends": [
         "http://localhost:8091",
         "http://localhost:8092"
-      ]
+      ],
+      "strategy": "least_latency"
+
     }
   ]
 }
