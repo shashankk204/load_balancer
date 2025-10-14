@@ -30,8 +30,9 @@ func NewRoute(urls []string) *BackendPool {
 	return &BackendPool{Backends: backends}
 }
 
-func (lb *LoadBalancer) AddRoute(prefix string, urls []string) {
+func (lb *LoadBalancer) AddRoute(prefix string, urls []string,strategy Strategy) {
 	pool := NewRoute(urls)
+	pool.Strategy = strategy
 	lb.Routes[prefix] = pool
 }
 
@@ -52,7 +53,9 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			target.DecActive()
 			target.RecordRequest(duration)
 			
-			log.Printf("[%s] %s -> %s in %v", req.Method, req.URL.Path, target.URL, duration)
+			log.Printf("[%s] %s -> %s [strategy=%s] in %v (avg %.2f ms, active %d)",
+	req.Method, req.URL.Path, target.URL, BP.Strategy, duration, target.AvgLatency(), target.ActiveRequests())
+
 			return
 		}
 	}
@@ -95,13 +98,14 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 
 
 
-func (lb *LoadBalancer) AddBackendToRoute(prefix string, backendURL string) error {
+func (lb *LoadBalancer) AddBackendToRoute(prefix string, backendURL string,strategy Strategy ) error {
 	lb.mux.Lock()
 	defer lb.mux.Unlock()
 
 	pool, exists := lb.Routes[prefix]
 	if !exists {
 		pool = NewRoute([]string{backendURL})
+		pool.Strategy=strategy;
 		lb.Routes[prefix] = pool
 		log.Printf("Created new route %s with backend %s", prefix, backendURL)
 		return nil

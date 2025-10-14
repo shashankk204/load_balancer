@@ -13,6 +13,10 @@ type AdminHandler struct {
 }
 
 func (a *AdminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	switch r.URL.Path {
 	case "/admin/add-backend":
 		a.handleAddBackend(w, r)
@@ -27,12 +31,14 @@ func (a *AdminHandler) handleAddBackend(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		Prefix string `json:"prefix"`
 		URL    string `json:"url"`
+		Strategy string   `json:"strategy,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := a.LB.AddBackendToRoute(req.Prefix, req.URL); err != nil {
+	strategy := core.ParseStrategy(req.Strategy)
+	if err := a.LB.AddBackendToRoute(req.Prefix, req.URL,strategy); err != nil {
 		http.Error(w, "Failed to add backend", http.StatusInternalServerError)
 		return
 	}

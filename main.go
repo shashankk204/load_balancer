@@ -16,6 +16,7 @@ import (
 type RouteConfig struct {
 	Prefix   string   `json:"prefix"`
 	Backends []string `json:"backends"`
+	Strategy string   `json:"strategy,omitempty"`
 }
 
 type Config struct {
@@ -46,7 +47,8 @@ func main() {
 	lb:=core.Initialize_LB()
 
 	for _, r := range cfg.Routes {
-		lb.AddRoute(r.Prefix, r.Backends)
+		strategy := core.ParseStrategy(r.Strategy)
+		lb.AddRoute(r.Prefix, r.Backends,strategy)
 	}
 
 	lb.StartHealthChecks(5*time.Second, "/health")

@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	// "sync"
@@ -52,26 +53,101 @@ func (b *Backend) IsAlive() bool {
 
 
 
+
+
+
+
+type Strategy string
+
+const (
+	RoundRobin     Strategy = "round_robin"
+	LeastLatency   Strategy = "least_latency"
+	LeastActive    Strategy = "least_active"
+)
+func ParseStrategy(s string) Strategy {
+	
+	switch Strategy(strings.ToLower(s)) {
+	case LeastActive:
+		return LeastActive
+	case LeastLatency:
+		return LeastLatency
+	default:
+		return RoundRobin
+	}
+}
+
 type BackendPool struct {
 	Backends []*Backend
 	Current  int64
+	Strategy Strategy
 }
 
 
+
+// func (BP *BackendPool) GetNextBackend() *Backend {
+	
+// 	for i:=0;i<len(BP.Backends);i++{
+// 		next:=atomic.AddInt64(&BP.Current,1)
+// 		idx:=int(next)%len(BP.Backends)
+// 		b:=BP.Backends[idx]
+// 		if(b.IsAlive()){
+// 			return b
+// 		}
+// 	}
+// 	return nil;
+// }
 
 func (BP *BackendPool) GetNextBackend() *Backend {
-	
-	for i:=0;i<len(BP.Backends);i++{
-		next:=atomic.AddInt64(&BP.Current,1)
-		idx:=int(next)%len(BP.Backends)
-		b:=BP.Backends[idx]
-		if(b.IsAlive()){
-			return b
+	backends := BP.Backends
+	n := len(backends)
+	if n == 0 {
+		return nil
+	}
+
+	switch BP.Strategy {
+	case LeastActive:
+		var best *Backend
+		var minActive int64 = 1 << 60 // infinity
+		for _, b := range backends {
+			if !b.IsAlive() {
+				continue
+			}
+			active := b.ActiveRequests()
+			if active < minActive {
+				minActive = active
+				best = b
+			}
+		}
+		return best
+
+	case LeastLatency:
+		var best *Backend
+		var bestLatency float64 = 1e18
+		for _, b := range backends {
+			if !b.IsAlive() {
+				continue
+			}
+			lat := b.AvgLatency()
+			if lat < bestLatency {
+				bestLatency = lat
+				best = b
+			}
+		}
+		return best
+
+	default: // Round robin (fallback)
+		for range n {
+			next := atomic.AddInt64(&BP.Current, 1)
+			idx := int(next) % n
+			b := backends[idx]
+			if b.IsAlive() {
+				return b
+			}
 		}
 	}
-	return nil;
-}
 
+	return nil
+}
 
 
 func (p *BackendPool) SetBackendAlive(url *url.URL, alive bool) {
