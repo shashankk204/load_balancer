@@ -4,6 +4,8 @@ import (
 	"log"
 	"net/http/httputil"
 	"net/url"
+	"time"
+
 	// "sync"
 	"sync/atomic"
 )
@@ -11,8 +13,10 @@ import (
 type Backend struct {
 	URL          *url.URL
 	Alive        int32
-	// mux          sync.RWMutex
 	ReverseProxy *httputil.ReverseProxy
+	TotalRequests int64          
+	TotalLatency  int64          
+	Active        int64 //current number of active requests
 }
 
 
@@ -81,3 +85,33 @@ func (p *BackendPool) SetBackendAlive(url *url.URL, alive bool) {
 
 
 
+// Record a request for this backend
+func (b *Backend) RecordRequest(duration time.Duration) {
+	atomic.AddInt64(&b.TotalRequests, 1)
+	atomic.AddInt64(&b.TotalLatency, duration.Nanoseconds())
+}
+
+// Increment active requests
+func (b *Backend) IncActive() {
+	atomic.AddInt64(&b.Active, 1)
+}
+
+// Decrement active requests
+func (b *Backend) DecActive() {
+	atomic.AddInt64(&b.Active, -1)
+}
+
+// Get average latency in milliseconds
+func (b *Backend) AvgLatency() float64 {
+	reqs := atomic.LoadInt64(&b.TotalRequests)
+	if reqs == 0 {
+		return 0
+	}
+	totalNs := atomic.LoadInt64(&b.TotalLatency)
+	return float64(totalNs)/1e6/float64(reqs) // convert ns → ms
+}
+
+// Get current number of active requests
+func (b *Backend) ActiveRequests() int64 {
+	return atomic.LoadInt64(&b.Active)
+}

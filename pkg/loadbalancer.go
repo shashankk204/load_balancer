@@ -1,9 +1,12 @@
 package core
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -11,6 +14,7 @@ import (
 
 type LoadBalancer struct {
 	Routes map[string]*BackendPool
+	mux    sync.RWMutex
 }
 
 func Initialize_LB() *LoadBalancer {
@@ -40,9 +44,14 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 				http.Error(w,"No Backend availabe",http.StatusServiceUnavailable)
 				return
 			}
+
+			target.IncActive()
 			proxy := target.ReverseProxy
 			proxy.ServeHTTP(w, req)
 			duration := time.Since(start)
+			target.DecActive()
+			target.RecordRequest(duration)
+			
 			log.Printf("[%s] %s -> %s in %v", req.Method, req.URL.Path, target.URL, duration)
 			return
 		}
@@ -79,3 +88,87 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 		}
 	}()
 }
+
+
+
+
+
+
+
+func (lb *LoadBalancer) AddBackendToRoute(prefix string, backendURL string) error {
+	lb.mux.Lock()
+	defer lb.mux.Unlock()
+
+	pool, exists := lb.Routes[prefix]
+	if !exists {
+		pool = NewRoute([]string{backendURL})
+		lb.Routes[prefix] = pool
+		log.Printf("Created new route %s with backend %s", prefix, backendURL)
+		return nil
+	}
+
+	newBackend := NewBackend(backendURL)
+	pool.Backends = append(pool.Backends, newBackend)
+	log.Printf("Added new backend %s to route %s", backendURL, prefix)
+	return nil
+}
+
+func (lb *LoadBalancer) RemoveBackendFromRoute(prefix string, backendURL string) {
+	lb.mux.Lock()
+	defer lb.mux.Unlock()
+
+	pool, exists := lb.Routes[prefix]
+	if !exists {
+		log.Printf("Route %s does not exist", prefix)
+		return
+	}
+
+	filtered := []*Backend{}
+	for _, b := range pool.Backends {
+		if b.URL.String() != backendURL {
+			filtered = append(filtered, b)
+		}
+	}
+
+	pool.Backends = filtered
+	log.Printf("Removed backend %s from route %s", backendURL, prefix)
+}
+
+
+
+func (lb *LoadBalancer) MetricsHandler(w http.ResponseWriter, r *http.Request) {
+	type BackendMetrics struct {
+		URL         string  `json:"url"`
+		Alive       bool    `json:"alive"`
+		Requests    int64   `json:"total_requests"`
+		AvgLatency  float64 `json:"avg_latency_ms"`
+		Active      int64   `json:"active_requests"`
+	}
+
+	out := map[string][]BackendMetrics{}
+
+	lb.mux.RLock()
+	defer lb.mux.RUnlock()
+
+	for prefix, pool := range lb.Routes {
+		var metrics []BackendMetrics
+		for _, b := range pool.Backends {
+			metrics = append(metrics, BackendMetrics{
+				URL:        b.URL.String(),
+				Alive:      b.IsAlive(),
+				Requests:   atomic.LoadInt64(&b.TotalRequests),
+				AvgLatency: b.AvgLatency(),
+				Active:     atomic.LoadInt64(&b.Active),
+			})
+		}
+		out[prefix] = metrics
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+
+
+
+
