@@ -65,7 +65,7 @@ const (
 	LeastActive    Strategy = "least_active"
 )
 func ParseStrategy(s string) Strategy {
-	
+
 	switch Strategy(strings.ToLower(s)) {
 	case LeastActive:
 		return LeastActive
@@ -83,19 +83,6 @@ type BackendPool struct {
 }
 
 
-
-// func (BP *BackendPool) GetNextBackend() *Backend {
-	
-// 	for i:=0;i<len(BP.Backends);i++{
-// 		next:=atomic.AddInt64(&BP.Current,1)
-// 		idx:=int(next)%len(BP.Backends)
-// 		b:=BP.Backends[idx]
-// 		if(b.IsAlive()){
-// 			return b
-// 		}
-// 	}
-// 	return nil;
-// }
 
 func (BP *BackendPool) GetNextBackend() *Backend {
 	backends := BP.Backends

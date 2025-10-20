@@ -19,6 +19,8 @@ type LogEntry struct {
 	Path      string `json:"path,omitempty"`
 	Target    string `json:"target,omitempty"`
 	Duration  string `json:"duration,omitempty"`
+	Status  string `json:"status,omitempty"`
+
 }
 
 
@@ -68,6 +70,8 @@ func writeLog(ctx context.Context, level, msg string, fields map[string]string, 
 		entry.Path = fields["path"]
 		entry.Target = fields["target"]
 		entry.Duration = fields["duration"]
+		entry.Status= fields["status"]
+
 	}
 
 	data, _ := json.Marshal(entry)

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/shashankk204/load_balancer/pkg/logger"
 )
 
 
@@ -39,23 +42,36 @@ func (lb *LoadBalancer) AddRoute(prefix string, urls []string,strategy Strategy)
 
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
+	ctx := logger.WithRequestID(req.Context())
+	lb.mux.RLock()  
+    defer lb.mux.RUnlock()
 	for prefix, BP := range lb.Routes {
 		if strings.HasPrefix(req.URL.Path, prefix) {
 			target := BP.GetNextBackend()
 			if target==nil{
+				logger.Error(ctx, "No backend available", map[string]string{
+					"method": req.Method,
+					"path":   req.URL.Path,
+				})
 				http.Error(w,"No Backend availabe",http.StatusServiceUnavailable)
 				return
 			}
 
 			target.IncActive()
 			proxy := target.ReverseProxy
+			
 			proxy.ServeHTTP(w, req)
 			duration := time.Since(start)
 			target.DecActive()
 			target.RecordRequest(duration)
 			
-			log.Printf("[%s] %s -> %s [strategy=%s] in %v (avg %.2f ms, active %d)",
-	req.Method, req.URL.Path, target.URL, BP.Strategy, duration, target.AvgLatency(), target.ActiveRequests())
+			logger.Info(ctx, "Routing request", map[string]string{
+				"method":   req.Method,
+				"path":     req.URL.Path,
+				"target":   target.URL.String(),
+				"duration": duration.String(),
+			})
+			log.Printf("[%s] %s -> %s [strategy=%s] in %v (avg %.2f ms, active %d)", req.Method, req.URL.Path, target.URL, BP.Strategy, duration, target.AvgLatency(), target.ActiveRequests())
 
 			return
 		}
@@ -71,9 +87,11 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 
 	go func() {
 		for range ticker.C {
+			lb.mux.RLock()
 			for prefix, pool := range lb.Routes {
 				for _, b := range pool.Backends {
 					go func(b *Backend, prefix string) {
+						ctx := logger.WithRequestID(context.Background())
 						healthURL := b.URL.String() + healthPath
 						resp, err := client.Get(healthURL)
 						isAlive := err == nil && resp != nil && resp.StatusCode == http.StatusOK
@@ -85,10 +103,16 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 						if isAlive {
 							status = "UP"
 						}
-						log.Printf("[%s] %s is %s", prefix, b.URL, status)
+						logger.Info(ctx, "Health check result", map[string]string{
+							"path":   healthURL,
+							"target": b.URL.String(),
+							"method": "GET",
+							"status": status,
+						})
 					}(b, prefix)
 				}
 			}
+			lb.mux.RUnlock()
 		}
 	}()
 }
@@ -178,6 +202,8 @@ func (lb *LoadBalancer) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 func (lb *LoadBalancer) GetRoutesInfo() []map[string]interface{} {
 	var result []map[string]interface{}
+	lb.mux.RLock()
+    defer lb.mux.RUnlock()
 	for prefix, pool := range lb.Routes {
 		var backends []string
 		for _, b := range pool.Backends {
@@ -193,6 +219,8 @@ func (lb *LoadBalancer) GetRoutesInfo() []map[string]interface{} {
 }
 
 func (lb *LoadBalancer) UpdateRoute(prefix string, backends []string, strategy string) error {
+	lb.mux.Lock()
+    defer lb.mux.Unlock()
 	pool, ok := lb.Routes[prefix]
 	if !ok {
 		return fmt.Errorf("route not found: %s", prefix)
@@ -202,8 +230,9 @@ func (lb *LoadBalancer) UpdateRoute(prefix string, backends []string, strategy s
 		newPool := NewRoute(backends)
 		pool.Backends = newPool.Backends
 	}
-	
-	pool.Strategy = ParseStrategy(strategy)
+	if strategy!=""{
+		pool.Strategy = ParseStrategy(strategy)
+	}
 	
 
 	lb.Routes[prefix] = pool
