@@ -1,6 +1,7 @@
 package core
 
 import (
+	"maps"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,10 +12,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	// core "github.com/shashankk204/load_balancer/pkg"
 	"github.com/shashankk204/load_balancer/pkg/logger"
+	"github.com/shashankk204/load_balancer/utils"
 )
 
-
+//TODO:
+// Add a timeout or context propagation to cancel stuck proxy calls.
+// Handle panics in backends gracefully:
 
 type LoadBalancer struct {
 	Routes map[string]*BackendPool
@@ -46,9 +51,13 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	lb.mux.RLock()  
     defer lb.mux.RUnlock()
 	for prefix, BP := range lb.Routes {
-		if strings.HasPrefix(req.URL.Path, prefix) {
+		if strings.HasPrefix(req.URL.Path, prefix) {  //TODO:need to implement Trie Data structre for Prefix matching
+
+			RequestsTotal.WithLabelValues(prefix).Inc()
+
 			target := BP.GetNextBackend()
 			if target==nil{
+				BackendErrors.WithLabelValues(prefix).Inc()
 				logger.Error(ctx, "No backend available", map[string]string{
 					"method": req.Method,
 					"path":   req.URL.Path,
@@ -64,6 +73,11 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			duration := time.Since(start)
 			target.DecActive()
 			target.RecordRequest(duration)
+
+			RequestDuration.WithLabelValues(prefix).Observe(duration.Seconds())
+			BackendRequestsTotal.WithLabelValues(prefix, target.URL.String()).Inc()
+			BackendAvgLatency.WithLabelValues(prefix, target.URL.String()).Set(target.AvgLatency())
+			BackendActive.WithLabelValues(prefix, target.URL.String()).Set(float64(target.ActiveRequests()))
 			
 			logger.Info(ctx, "Routing request", map[string]string{
 				"method":   req.Method,
@@ -88,7 +102,10 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 	go func() {
 		for range ticker.C {
 			lb.mux.RLock()
-			for prefix, pool := range lb.Routes {
+			routesSnapshot := make(map[string]*BackendPool, len(lb.Routes))
+			maps.Copy(routesSnapshot, lb.Routes)
+			lb.mux.RUnlock()
+			for prefix, pool := range routesSnapshot {
 				for _, b := range pool.Backends {
 					go func(b *Backend, prefix string) {
 						ctx := logger.WithRequestID(context.Background())
@@ -99,6 +116,7 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 							resp.Body.Close()
 						}
 						b.SetAlive(isAlive)
+						BackendAlive.WithLabelValues(prefix, b.URL.String()).Set(utils.BoolToFloat(isAlive))
 						status := "DOWN"
 						if isAlive {
 							status = "UP"
@@ -112,7 +130,7 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 					}(b, prefix)
 				}
 			}
-			lb.mux.RUnlock()
+			
 		}
 	}()
 }

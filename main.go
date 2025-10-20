@@ -11,6 +11,7 @@ import (
 	core "github.com/shashankk204/load_balancer/pkg"
 
 	controller "github.com/shashankk204/load_balancer/controller"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type RouteConfig struct {
@@ -54,11 +55,15 @@ func main() {
 	lb.StartHealthChecks(5*time.Second, "/health")
  
 	adminHandler := &controller.AdminHandler{LB: lb}
+	core.InitMetrics();
 
 	mux := http.NewServeMux()
 	mux.Handle("/", lb)                   
 	mux.Handle("/admin/", adminHandler)   
-	mux.HandleFunc("/metrics", lb.MetricsHandler)
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/metrics2", lb.MetricsHandler)
+
+	// mux.HandleFunc("/metrics", lb.MetricsHandler)
 
 	fmt.Println("Load Balancer started at :8080")
 	if err := http.ListenAndServe(":8080", mux); err != nil {

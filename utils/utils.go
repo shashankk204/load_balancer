@@ -10,3 +10,9 @@ func RespondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(payload)
 }
+func BoolToFloat(ok bool) float64 {
+	if ok {
+		return 1
+	}
+	return 0
+}
