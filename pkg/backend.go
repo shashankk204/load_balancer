@@ -29,8 +29,7 @@ func NewBackend(rawURL string) *Backend {
 	}
 	return &Backend{
 		URL:          parsedURL,
-		Alive:        1,
-		
+		Alive:        1,	
 		ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
 	}
 }

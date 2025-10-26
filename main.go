@@ -40,6 +40,8 @@ func LoadConfig(path string) (*Config, error) {
 
 
 func main() {
+	core.InitMetrics();
+
 	cfg, err := LoadConfig("routes.json")
 	if err != nil {
 		log.Fatal(err)
@@ -52,18 +54,17 @@ func main() {
 		lb.AddRoute(r.Prefix, r.Backends,strategy)
 	}
 
-	lb.StartHealthChecks(5*time.Second, "/health")
+	go lb.StartHealthChecks(5*time.Second, "/health")
  
 	adminHandler := &controller.AdminHandler{LB: lb}
-	core.InitMetrics();
 
 	mux := http.NewServeMux()
 	mux.Handle("/", lb)                   
 	mux.Handle("/admin/", adminHandler)   
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/metrics2", lb.MetricsHandler)
+	// mux.HandleFunc("/metrics2", lb.MetricsHandler)
 
-	// mux.HandleFunc("/metrics", lb.MetricsHandler)
+
 
 	fmt.Println("Load Balancer started at :8080")
 	if err := http.ListenAndServe(":8080", mux); err != nil {

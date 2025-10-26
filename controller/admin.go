@@ -72,7 +72,7 @@ func (a *AdminHandler) handleRemoveBackend(w http.ResponseWriter, r *http.Reques
 }
 
 
-func (a *AdminHandler) handleListRoutes(w http.ResponseWriter, r *http.Request) {
+func (a *AdminHandler) handleListRoutes(w http.ResponseWriter, _ *http.Request) {
 	routes := a.LB.GetRoutesInfo()
 	utils.RespondJSON(w, http.StatusOK, routes)
 }
