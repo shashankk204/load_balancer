@@ -6,14 +6,14 @@ A high-performance, production-ready HTTP load balancer written in Go with compr
 
 - [Features](#features)
 - [Architecture](#architecture)
+- [Performance](#performance)
+- [Load Balancing Strategies](#load-balancing-strategies)
 - [Installation](#installation)
 - [Configuration](#configuration)
-- [Load Balancing Strategies](#load-balancing-strategies)
 - [Monitoring & Metrics](#monitoring--metrics)
 - [API Endpoints](#api-endpoints)
 - [Development](#development)
 - [Usage Examples](#usage-examples)
-- [Performance](#performance)
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
@@ -75,6 +75,84 @@ A high-performance, production-ready HTTP load balancer written in Go with compr
     │Backend1│ │Backend2│ │Backend3│
     └────────┘ └────────┘ └────────┘
 ```
+
+## Performance
+
+Below are Grafana dashboard snapshots showing real-world performance and runtime metrics.(stress tested using Postman)
+
+Load Balancer Overview:
+![Load Balancer Overview](assets/grafana1.png)
+
+Backend Health and Load Distribution:
+![Backend Health and Load Distribution](assets/grafana2.png)
+
+Request/Response analysis and Health Monitoring:
+![Request/Response analysis and health monitoring](assets/grafana3.png)
+
+Individual Backend performance analysis:
+![Individual Backend performance analysis](assets/grafana4.png)
+
+## Load Balancing Strategies
+
+### 1. Round Robin
+Distributes requests sequentially across all healthy backends.
+
+```yaml
+strategy: round_robin
+```
+
+**Use case**: Even distribution with similar backend capacity
+
+### 2. Least Connections
+Routes to the backend with the fewest active connections.
+
+```yaml
+strategy: least_connections
+```
+
+**Use case**: Long-running connections, WebSocket, streaming
+
+### 3. Weighted Round Robin
+Distributes based on assigned weights.
+
+```json
+ {
+      "prefix": "/posts",
+      "backends": [
+        {
+            "url":"http://localhost:8081"
+            "weight": 3    
+        },
+        {
+            "url":"http://localhost:8082"
+            "weight": 1
+        }
+      ],
+      "strategy": "weighted_round_robin"
+
+}
+```
+
+**Use case**: Different backend capacities (CPU, memory)
+
+### 4. Least Loaded
+Routes to backend with lowest combined metric of active connections and latency.
+
+```yaml
+strategy: least_loaded
+```
+
+**Use case**: Mixed workloads, varying response times
+
+### 5. IP Hash
+Consistent routing based on client IP address.
+
+```yaml
+strategy: ip_hash
+```
+
+**Use case**: Session affinity, stateful applications
+
 
 ## Installation
 
@@ -165,66 +243,6 @@ LB_LOG_FORMAT=json
 LB_METRICS_ENABLED=true
 ``` -->
 
-## Load Balancing Strategies
-
-### 1. Round Robin
-Distributes requests sequentially across all healthy backends.
-
-```yaml
-strategy: round_robin
-```
-
-**Use case**: Even distribution with similar backend capacity
-
-### 2. Least Connections
-Routes to the backend with the fewest active connections.
-
-```yaml
-strategy: least_connections
-```
-
-**Use case**: Long-running connections, WebSocket, streaming
-
-### 3. Weighted Round Robin
-Distributes based on assigned weights.
-
-```json
- {
-      "prefix": "/posts",
-      "backends": [
-        {
-            "url":"http://localhost:8081"
-            "weight": 3    
-        },
-        {
-            "url":"http://localhost:8082"
-            "weight": 1
-        }
-      ],
-      "strategy": "weighted_round_robin"
-
-}
-```
-
-**Use case**: Different backend capacities (CPU, memory)
-
-### 4. Least Loaded
-Routes to backend with lowest combined metric of active connections and latency.
-
-```yaml
-strategy: least_loaded
-```
-
-**Use case**: Mixed workloads, varying response times
-
-### 5. IP Hash
-Consistent routing based on client IP address.
-
-```yaml
-strategy: ip_hash
-```
-
-**Use case**: Session affinity, stateful applications
 
 ## Monitoring & Metrics
 
@@ -435,6 +453,7 @@ load_balancer/
 │   ├── backend.go               # Backend server implementation
 │   ├── loadbalancer.go          # Core load balancer logic
 │   ├── metrics.go               # Prometheus metrics
+│   ├── Trie.go                  # Trie Datastructure Implementation
 │   └── logger/
 │       └── logger.go 
 ├── controller/
@@ -503,23 +522,6 @@ curl http://localhost:9090/admin/list | jq '.["/users"].backends[] | {url, total
 # Monitor health status
 curl -s http://localhost:9090/admin/list | jq '.[] | {prefix: .prefix, backends: [.backends[] | {url, healthy}]}'
 ```
-
-## Performance
-
-Below are Grafana dashboard snapshots showing real-world performance and runtime metrics.(stress tested using Postman)
-
-Load Balancer Overview:
-![Load Balancer Overview](assets/grafana1.png)
-
-Backend Health and Load Distribution:
-![Backend Health and Load Distribution](assets/grafana2.png)
-
-Request/Response analysis and Health Monitoring:
-![Request/Response analysis and health monitoring](assets/grafana3.png)
-
-Individual Backend performance analysis:
-![Individual Backend performance analysis](assets/grafana4.png)
-
 
 ### Optimization Tips
 
