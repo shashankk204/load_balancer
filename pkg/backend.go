@@ -1,6 +1,7 @@
 package core
 
 import (
+	"hash/fnv"
 	"log"
 	"net/http/httputil"
 	"net/url"
@@ -12,15 +13,13 @@ import (
 )
 
 type Backend struct {
-	URL          *url.URL
-	Alive        int32
-	ReverseProxy *httputil.ReverseProxy
-	TotalRequests int64          
-	TotalLatency  int64          
+	URL           *url.URL
+	Alive         int32
+	ReverseProxy  *httputil.ReverseProxy
+	TotalRequests int64
+	TotalLatency  int64
 	Active        int64 //current number of active requests
 }
-
-
 
 func NewBackend(rawURL string) *Backend {
 	parsedURL, err := url.Parse(rawURL)
@@ -29,11 +28,10 @@ func NewBackend(rawURL string) *Backend {
 	}
 	return &Backend{
 		URL:          parsedURL,
-		Alive:        1,	
+		Alive:        1,
 		ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
 	}
 }
-
 
 func (b *Backend) SetAlive(alive bool) {
 	var val int32
@@ -47,22 +45,15 @@ func (b *Backend) IsAlive() bool {
 	return atomic.LoadInt32(&b.Alive) == 1
 }
 
-
-
-
-
-
-
-
-
-
 type Strategy string
 
 const (
-	RoundRobin     Strategy = "round_robin"
-	LeastLatency   Strategy = "least_latency"
-	LeastActive    Strategy = "least_active"
+	RoundRobin   Strategy = "round_robin"
+	LeastLatency Strategy = "least_latency"
+	LeastActive  Strategy = "least_active"
+	IPHash       Strategy = "ip_hash"
 )
+
 func ParseStrategy(s string) Strategy {
 
 	switch Strategy(strings.ToLower(s)) {
@@ -70,6 +61,8 @@ func ParseStrategy(s string) Strategy {
 		return LeastActive
 	case LeastLatency:
 		return LeastLatency
+	case IPHash:
+		return IPHash
 	default:
 		return RoundRobin
 	}
@@ -81,9 +74,7 @@ type BackendPool struct {
 	Strategy Strategy
 }
 
-
-
-func (BP *BackendPool) GetNextBackend() *Backend {
+func (BP *BackendPool) GetNextBackend(clientIP string) *Backend {
 	backends := BP.Backends
 	n := len(backends)
 	if n == 0 {
@@ -120,7 +111,16 @@ func (BP *BackendPool) GetNextBackend() *Backend {
 			}
 		}
 		return best
-
+	case IPHash:
+		hash := hashIP(clientIP)
+		idx := int(hash) % n
+		for i := 0; i < n; i++ {
+			tryIdx := (idx + i) % n
+			b := backends[tryIdx]
+			if b.IsAlive() {
+				return b
+			}
+		}
 	default: // Round robin (fallback)
 		for range n {
 			next := atomic.AddInt64(&BP.Current, 1)
@@ -134,7 +134,11 @@ func (BP *BackendPool) GetNextBackend() *Backend {
 
 	return nil
 }
-
+func hashIP(ip string) uint32 {
+    h := fnv.New32a()
+    h.Write([]byte(ip))
+    return h.Sum32()
+}
 
 func (p *BackendPool) SetBackendAlive(url *url.URL, alive bool) {
 	for _, b := range p.Backends {
@@ -143,9 +147,6 @@ func (p *BackendPool) SetBackendAlive(url *url.URL, alive bool) {
 		}
 	}
 }
-
-
-
 
 // Record a request for this backend
 func (b *Backend) RecordRequest(duration time.Duration) {
@@ -170,7 +171,7 @@ func (b *Backend) AvgLatency() float64 {
 		return 0
 	}
 	totalNs := atomic.LoadInt64(&b.TotalLatency)
-	return float64(totalNs)/1e6/float64(reqs) // convert ns → ms
+	return float64(totalNs) / 1e6 / float64(reqs) // convert ns → ms
 }
 
 // Get current number of active requests

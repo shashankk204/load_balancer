@@ -8,9 +8,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/shashankk204/load_balancer/middleware"
 	core "github.com/shashankk204/load_balancer/pkg"
 
 	controller "github.com/shashankk204/load_balancer/controller"
+
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -41,13 +43,13 @@ func LoadConfig(path string) (*Config, error) {
 
 func main() {
 	core.InitMetrics();
-
+	lb:=core.Initialize_LB()
+	rl := middleware.NewRateLimiter(5,10)
 	cfg, err := LoadConfig("routes.json")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	lb:=core.Initialize_LB()
 
 	for _, r := range cfg.Routes {
 		strategy := core.ParseStrategy(r.Strategy)
@@ -59,7 +61,7 @@ func main() {
 	adminHandler := &controller.AdminHandler{LB: lb}
 
 	mux := http.NewServeMux()
-	mux.Handle("/", lb)                   
+	mux.Handle("/", middleware.RateLimitMiddleware(rl, lb))               
 	mux.Handle("/admin/", adminHandler)   
 	mux.Handle("/metrics", promhttp.Handler())
 	// mux.HandleFunc("/metrics2", lb.MetricsHandler)

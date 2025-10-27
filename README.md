@@ -25,9 +25,9 @@ A high-performance, production-ready HTTP load balancer written in Go with compr
 ### Core Functionality
 - Multiple load balancing strategies (Round Robin, Least Connections, Weighted Round Robin, Least Loaded, IP Hash)
 - Active and passive health checking
-- Automatic backend failure detection and recovery
+- Automatic backend failure and recovery detection
 - Request/response size tracking
-- Configurable timeouts and retry logic
+- Rate limiting
 - Graceful shutdown
 
 ### Monitoring & Observability
@@ -571,7 +571,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 
 ## Roadmap
-- [ ] Rate limiting
 - [ ] Circuit breaker pattern
 - [ ] WebSocket support
 - [ ] gRPC load balancing

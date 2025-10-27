@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,8 +81,8 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		if req.ContentLength > 0 {
 			RouteRequestSize.WithLabelValues(prefix).Observe(float64(req.ContentLength))
 		}
-
-		target := BP.GetNextBackend()
+		clientIP := strings.Split(req.RemoteAddr, ":")[0]
+		target := BP.GetNextBackend(clientIP);
 		if target == nil {
 			RouteErrorsTotal.WithLabelValues(prefix, "no_backend_available").Inc()
 			logger.Error(ctx, "No backend available", map[string]string{
@@ -270,37 +271,6 @@ func (lb *LoadBalancer) RemoveBackendFromRoute(prefix string, backendURL string)
 	log.Printf("Removed backend %s from route %s", backendURL, prefix)
 }
 
-// func (lb *LoadBalancer) MetricsHandler(w http.ResponseWriter, r *http.Request) {
-// 	type BackendMetrics struct {
-// 		URL         string  `json:"url"`
-// 		Alive       bool    `json:"alive"`
-// 		Requests    int64   `json:"total_requests"`
-// 		AvgLatency  float64 `json:"avg_latency_ms"`
-// 		Active      int64   `json:"active_requests"`
-// 	}
-
-// 	out := map[string][]BackendMetrics{}
-
-// 	lb.mux.RLock()
-// 	defer lb.mux.RUnlock()
-
-// 	for prefix, pool := range lb.Routes {
-// 		var metrics []BackendMetrics
-// 		for _, b := range pool.Backends {
-// 			metrics = append(metrics, BackendMetrics{
-// 				URL:        b.URL.String(),
-// 				Alive:      b.IsAlive(),
-// 				Requests:   atomic.LoadInt64(&b.TotalRequests),
-// 				AvgLatency: b.AvgLatency(),
-// 				Active:     atomic.LoadInt64(&b.Active),
-// 			})
-// 		}
-// 		out[prefix] = metrics
-// 	}
-
-// 	w.Header().Set("Content-Type", "application/json")
-// 	json.NewEncoder(w).Encode(out)
-// }
 
 func (lb *LoadBalancer) GetRoutesInfo() []map[string]interface{} {
 	var result []map[string]interface{}
