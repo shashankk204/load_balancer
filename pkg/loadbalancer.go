@@ -7,13 +7,11 @@ import (
 	"maps"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	// core "github.com/shashankk204/load_balancer/pkg"
 	"github.com/shashankk204/load_balancer/pkg/logger"
-	
 )
 
 //TODO:
@@ -22,12 +20,14 @@ import (
 
 type LoadBalancer struct {
 	Routes map[string]*BackendPool
+	Trie   *Trie
 	mux    sync.RWMutex
 }
 
 func Initialize_LB() *LoadBalancer {
 	return &LoadBalancer{
-		Routes:      make(map[string]*BackendPool),
+		Routes: make(map[string]*BackendPool),
+		Trie:   NewTrie(),
 	}
 }
 
@@ -39,158 +39,148 @@ func NewRoute(urls []string) *BackendPool {
 	return &BackendPool{Backends: backends}
 }
 
-func (lb *LoadBalancer) AddRoute(prefix string, urls []string,strategy Strategy) {
+func (lb *LoadBalancer) AddRoute(prefix string, urls []string, strategy Strategy) {
 	pool := NewRoute(urls)
 	pool.Strategy = strategy
 	lb.Routes[prefix] = pool
+	lb.Trie.Insert(prefix)
 }
-
 
 // This is a Response Writer Wrapper pattern used to intercept and capture HTTP response details that are normally not accessible after the response is sent.
 type responseWriterWrapper struct {
-    http.ResponseWriter
-    statusCode   int
-    responseSize int64
+	http.ResponseWriter
+	statusCode   int
+	responseSize int64
 }
 
 func (w *responseWriterWrapper) WriteHeader(statusCode int) {
-    w.statusCode = statusCode
-    w.ResponseWriter.WriteHeader(statusCode)
+	w.statusCode = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
 }
 
 func (w *responseWriterWrapper) Write(data []byte) (int, error) {
-    n, err := w.ResponseWriter.Write(data)
-    w.responseSize += int64(n)
-    return n, err
+	n, err := w.ResponseWriter.Write(data)
+	w.responseSize += int64(n)
+	return n, err
 }
-
 
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	ctx := logger.WithRequestID(req.Context())
 
-	lb.mux.RLock()  
-    defer lb.mux.RUnlock()
-	
-	for prefix, BP := range lb.Routes {
-		if strings.HasPrefix(req.URL.Path, prefix) {  //TODO:need to implement Trie Data structre for Prefix matching
+	lb.mux.RLock()
+	defer lb.mux.RUnlock()
+	ok, prefix := lb.Trie.MatchPrefix(req.URL.Path)
+	if ok {
+		BP := lb.Routes[prefix]
 
+		RouteActiveRequests.WithLabelValues(prefix).Inc()
+		defer RouteActiveRequests.WithLabelValues(prefix).Dec()
 
-			RouteActiveRequests.WithLabelValues(prefix).Inc()
-            defer RouteActiveRequests.WithLabelValues(prefix).Dec()
-			
+		if req.ContentLength > 0 {
+			RouteRequestSize.WithLabelValues(prefix).Observe(float64(req.ContentLength))
+		}
 
-
-			if req.ContentLength > 0 {
-                RouteRequestSize.WithLabelValues(prefix).Observe(float64(req.ContentLength))
-            }
-
-
-			target := BP.GetNextBackend()
-			if target==nil{
-				RouteErrorsTotal.WithLabelValues(prefix, "no_backend_available").Inc()
-				logger.Error(ctx, "No backend available", map[string]string{
-					"method": req.Method,
-					"path":   req.URL.Path,
-				})
-				http.Error(w,"No Backend availabe",http.StatusServiceUnavailable)
-				return
-			}
-
-			target.IncActive()
-			BackendActiveConnections.WithLabelValues(prefix, target.URL.String(), target.URL.Host).Inc()
-			defer BackendActiveConnections.WithLabelValues(prefix, target.URL.String(), target.URL.Host).Dec()
-			defer target.DecActive()
-
-			BackendSelectionTotal.WithLabelValues(prefix, target.URL.String(), target.URL.Host, string(BP.Strategy)).Inc()
-
-
-			 responseWrapper := &responseWriterWrapper{
-                ResponseWriter: w,
-                statusCode:     http.StatusOK,
-                responseSize:   0,
-            }
-            
-
-			proxy := target.ReverseProxy
-			proxy.ServeHTTP(responseWrapper, req)
-
-
-			duration := time.Since(start)
-			target.RecordRequest(duration)
-
-			statusCode := responseWrapper.statusCode
-            responseSize := responseWrapper.responseSize
-
-			lb.updateBackendMetrics(prefix, target, duration, statusCode)
-
-			RouteRequestsTotal.WithLabelValues(prefix, req.Method, strconv.Itoa(statusCode)).Inc()
-            RouteRequestDuration.WithLabelValues(prefix, req.Method).Observe(duration.Seconds())
-            
-			if responseSize > 0 {
-                RouteResponseSize.WithLabelValues(prefix).Observe(float64(responseSize))
-            }
-
-			if statusCode >= 400 {
-                errorType := "client_error"
-                if statusCode >= 500 {
-                    errorType = "server_error"
-                }
-                RouteErrorsTotal.WithLabelValues(prefix, errorType).Inc()
-            }
-			
-			logger.Info(ctx, "Routing request", map[string]string{
-				"method":   req.Method,
-				"path":     req.URL.Path,
-				"target":   target.URL.String(),
-				"duration": duration.String(),
+		target := BP.GetNextBackend()
+		if target == nil {
+			RouteErrorsTotal.WithLabelValues(prefix, "no_backend_available").Inc()
+			logger.Error(ctx, "No backend available", map[string]string{
+				"method": req.Method,
+				"path":   req.URL.Path,
 			})
-			log.Printf("[%s] %s -> %s [strategy=%s] in %v (avg %.2f ms, active %d)", req.Method, req.URL.Path, target.URL, BP.Strategy, duration, target.AvgLatency(), target.ActiveRequests())
-
+			http.Error(w, "No Backend availabe", http.StatusServiceUnavailable)
 			return
 		}
+
+		target.IncActive()
+		BackendActiveConnections.WithLabelValues(prefix, target.URL.String(), target.URL.Host).Inc()
+		defer BackendActiveConnections.WithLabelValues(prefix, target.URL.String(), target.URL.Host).Dec()
+		defer target.DecActive()
+
+		BackendSelectionTotal.WithLabelValues(prefix, target.URL.String(), target.URL.Host, string(BP.Strategy)).Inc()
+
+		responseWrapper := &responseWriterWrapper{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK,
+			responseSize:   0,
+		}
+
+		proxy := target.ReverseProxy
+		proxy.ServeHTTP(responseWrapper, req)
+
+		duration := time.Since(start)
+		target.RecordRequest(duration)
+
+		statusCode := responseWrapper.statusCode
+		responseSize := responseWrapper.responseSize
+
+		lb.updateBackendMetrics(prefix, target, duration, statusCode)
+
+		RouteRequestsTotal.WithLabelValues(prefix, req.Method, strconv.Itoa(statusCode)).Inc()
+		RouteRequestDuration.WithLabelValues(prefix, req.Method).Observe(duration.Seconds())
+
+		if responseSize > 0 {
+			RouteResponseSize.WithLabelValues(prefix).Observe(float64(responseSize))
+		}
+
+		if statusCode >= 400 {
+			errorType := "client_error"
+			if statusCode >= 500 {
+				errorType = "server_error"
+			}
+			RouteErrorsTotal.WithLabelValues(prefix, errorType).Inc()
+		}
+
+		logger.Info(ctx, "Routing request", map[string]string{
+			"method":   req.Method,
+			"path":     req.URL.Path,
+			"target":   target.URL.String(),
+			"duration": duration.String(),
+		})
+		log.Printf("[%s] %s -> %s [strategy=%s] in %v (avg %.2f ms, active %d)", req.Method, req.URL.Path, target.URL, BP.Strategy, duration, target.AvgLatency(), target.ActiveRequests())
+
+		return
+
 	}
 	RouteErrorsTotal.WithLabelValues("unknown", "route_not_found").Inc()
-    http.Error(w, "No backend found for route", http.StatusNotFound)
+	http.Error(w, "No backend found for route", http.StatusNotFound)
 }
 
 func (lb *LoadBalancer) updateBackendMetrics(routePrefix string, backend *Backend, duration time.Duration, statusCode int) {
-    backendURL := backend.URL.String()
-    backendHost := backend.URL.Host
-    
-    // Update backend request metrics
-    BackendRequestsTotal.WithLabelValues(routePrefix, backendURL, backendHost, strconv.Itoa(statusCode)).Inc()
-    BackendRequestDuration.WithLabelValues(routePrefix, backendURL, backendHost).Observe(duration.Seconds())
-    
+	backendURL := backend.URL.String()
+	backendHost := backend.URL.Host
 
-    
-    // Update load score (active requests + normalized latency)
-    active := float64(backend.ActiveRequests())
-    latency := backend.AvgLatency()
-    loadScore := active + (latency / 100)
-    BackendLoadScore.WithLabelValues(routePrefix, backendURL, backendHost).Set(loadScore)
-    
-    // Record backend failures if status code indicates failure
-    if statusCode >= 500 {
-        failureType := "server_error"
-        BackendFailuresTotal.WithLabelValues(routePrefix, backendURL, backendHost, failureType).Inc()
-    }
+	// Update backend request metrics
+	BackendRequestsTotal.WithLabelValues(routePrefix, backendURL, backendHost, strconv.Itoa(statusCode)).Inc()
+	BackendRequestDuration.WithLabelValues(routePrefix, backendURL, backendHost).Observe(duration.Seconds())
+
+	// Update load score (active requests + normalized latency)
+	active := float64(backend.ActiveRequests())
+	latency := backend.AvgLatency()
+	loadScore := active + (latency / 100)
+	BackendLoadScore.WithLabelValues(routePrefix, backendURL, backendHost).Set(loadScore)
+
+	// Record backend failures if status code indicates failure
+	if statusCode >= 500 {
+		failureType := "server_error"
+		BackendFailuresTotal.WithLabelValues(routePrefix, backendURL, backendHost, failureType).Inc()
+	}
 }
 
 func (lb *LoadBalancer) updateBackendHealthMetrics(routePrefix string, backend *Backend, isAlive bool, healthCheckDuration time.Duration) {
-    backendURL := backend.URL.String()
-    backendHost := backend.URL.Host
-    
-    // Update health status
-    if isAlive {
-        BackendHealthStatus.WithLabelValues(routePrefix, backendURL, backendHost).Set(1)
-    } else {
-        BackendHealthStatus.WithLabelValues(routePrefix, backendURL, backendHost).Set(0)
-        BackendHealthCheckFailures.WithLabelValues(routePrefix, backendURL, backendHost).Inc()
-    }
-    
-    // Update health check duration
-    BackendHealthCheckDuration.WithLabelValues(routePrefix, backendURL, backendHost).Observe(healthCheckDuration.Seconds())
+	backendURL := backend.URL.String()
+	backendHost := backend.URL.Host
+
+	// Update health status
+	if isAlive {
+		BackendHealthStatus.WithLabelValues(routePrefix, backendURL, backendHost).Set(1)
+	} else {
+		BackendHealthStatus.WithLabelValues(routePrefix, backendURL, backendHost).Set(0)
+		BackendHealthCheckFailures.WithLabelValues(routePrefix, backendURL, backendHost).Inc()
+	}
+
+	// Update health check duration
+	BackendHealthCheckDuration.WithLabelValues(routePrefix, backendURL, backendHost).Observe(healthCheckDuration.Seconds())
 }
 
 func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath string) {
@@ -216,9 +206,9 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 							resp.Body.Close()
 						}
 						if !isAlive && err != nil {
-                            failureType := "connection_error"
-                            BackendFailuresTotal.WithLabelValues(prefix, b.URL.String(), b.URL.Host, failureType).Inc()
-                        }
+							failureType := "connection_error"
+							BackendFailuresTotal.WithLabelValues(prefix, b.URL.String(), b.URL.Host, failureType).Inc()
+						}
 						b.SetAlive(isAlive)
 						lb.updateBackendHealthMetrics(prefix, b, isAlive, healthCheckDuration)
 						status := "DOWN"
@@ -234,26 +224,21 @@ func (lb *LoadBalancer) StartHealthChecks(interval time.Duration, healthPath str
 					}(b, prefix)
 				}
 			}
-			
+
 		}
 	}()
 }
 
-
-
-
-
-
-
-func (lb *LoadBalancer) AddBackendToRoute(prefix string, backendURL string,strategy Strategy ) error {
+func (lb *LoadBalancer) AddBackendToRoute(prefix string, backendURL string, strategy Strategy) error {
 	lb.mux.Lock()
 	defer lb.mux.Unlock()
 
 	pool, exists := lb.Routes[prefix]
 	if !exists {
 		pool = NewRoute([]string{backendURL})
-		pool.Strategy=strategy;
+		pool.Strategy = strategy
 		lb.Routes[prefix] = pool
+		lb.Trie.Insert(prefix);
 		log.Printf("Created new route %s with backend %s", prefix, backendURL)
 		return nil
 	}
@@ -284,8 +269,6 @@ func (lb *LoadBalancer) RemoveBackendFromRoute(prefix string, backendURL string)
 	pool.Backends = filtered
 	log.Printf("Removed backend %s from route %s", backendURL, prefix)
 }
-
-
 
 // func (lb *LoadBalancer) MetricsHandler(w http.ResponseWriter, r *http.Request) {
 // 	type BackendMetrics struct {
@@ -319,13 +302,10 @@ func (lb *LoadBalancer) RemoveBackendFromRoute(prefix string, backendURL string)
 // 	json.NewEncoder(w).Encode(out)
 // }
 
-
-
-
 func (lb *LoadBalancer) GetRoutesInfo() []map[string]interface{} {
 	var result []map[string]interface{}
 	lb.mux.RLock()
-    defer lb.mux.RUnlock()
+	defer lb.mux.RUnlock()
 	for prefix, pool := range lb.Routes {
 		var backends []string
 		for _, b := range pool.Backends {
@@ -342,7 +322,7 @@ func (lb *LoadBalancer) GetRoutesInfo() []map[string]interface{} {
 
 func (lb *LoadBalancer) UpdateRoute(prefix string, backends []string, strategy string) error {
 	lb.mux.Lock()
-    defer lb.mux.Unlock()
+	defer lb.mux.Unlock()
 	pool, ok := lb.Routes[prefix]
 	if !ok {
 		return fmt.Errorf("route not found: %s", prefix)
@@ -352,15 +332,14 @@ func (lb *LoadBalancer) UpdateRoute(prefix string, backends []string, strategy s
 		newPool := NewRoute(backends)
 		pool.Backends = newPool.Backends
 	}
-	if strategy!=""{
+	if strategy != "" {
 		oldStrategy := string(pool.Strategy)
-        newStrategy := ParseStrategy(strategy)
+		newStrategy := ParseStrategy(strategy)
 		if oldStrategy != string(newStrategy) {
-            RouteStrategyChanges.WithLabelValues(prefix, oldStrategy, string(newStrategy)).Inc()
-            pool.Strategy = newStrategy
-        }
+			RouteStrategyChanges.WithLabelValues(prefix, oldStrategy, string(newStrategy)).Inc()
+			pool.Strategy = newStrategy
+		}
 	}
-	
 
 	lb.Routes[prefix] = pool
 	return nil

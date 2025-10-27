@@ -10,8 +10,8 @@
     {
       "prefix": "/posts",
       "backends": [
-        "http://localhost:8091",
-        "http://localhost:8092"
+        "http://localhost:8095",
+        "http://localhost:8096"
       ],
       "strategy": "least_latency"
 
