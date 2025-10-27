@@ -506,7 +506,7 @@ curl -s http://localhost:9090/admin/list | jq '.[] | {prefix: .prefix, backends:
 
 ## Performance
 
-Below are Grafana dashboard snapshots showing real-world performance and runtime metrics.
+Below are Grafana dashboard snapshots showing real-world performance and runtime metrics.(stress tested using Postman)
 
 Load Balancer Overview:
 ![Load Balancer Overview](assets/grafana1.png)
